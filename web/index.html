@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#7c3aed">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Todo</title>
+<link rel="manifest" href="manifest.json">
+<style>
+:root {
+  --bg:#0f0f1a; --surface:#1a1a2e; --card:#16213e; --border:#2a2a4a;
+  --accent:#7c3aed; --accent2:#a855f7;
+  --red:#ef4444; --yellow:#f59e0b; --green:#22c55e; --blue:#3b82f6;
+  --text:#e2e8f0; --muted:#64748b; --radius:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;overscroll-behavior:none}
+#app{display:flex;flex-direction:column;height:100dvh;max-width:600px;margin:0 auto}
+
+/* header */
+header{background:var(--surface);padding:env(safe-area-inset-top,0) 16px 0;border-bottom:1px solid var(--border);flex-shrink:0}
+.htop{display:flex;align-items:center;justify-content:space-between;padding:14px 0 10px}
+.title{font-size:22px;font-weight:700;display:flex;align-items:center;gap:8px}
+.title em{font-style:normal;font-size:22px}
+.hstats{display:flex;gap:8px}
+.chip{font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;background:rgba(124,58,237,.18);color:#c4b5fd}
+.chip.r{background:rgba(239,68,68,.2);color:#fca5a5}
+.chip.g{background:rgba(34,197,94,.15);color:#86efac}
+
+/* tabs */
+.tabs{display:flex;gap:2px}
+.tab{flex:1;text-align:center;padding:10px 2px 12px;font-size:13px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;transition:.2s;user-select:none}
+.tab.on{color:#c4b5fd;border-bottom-color:var(--accent)}
+
+/* search */
+.sbar{padding:10px 16px;flex-shrink:0;position:relative}
+.sbar input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;padding:9px 12px 9px 36px;outline:none;transition:.2s}
+.sbar input:focus{border-color:var(--accent)}
+.sico{position:absolute;left:28px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+
+/* list */
+#lw{flex:1;overflow-y:auto;padding:6px 12px 100px}
+#lw::-webkit-scrollbar{width:0}
+.slabel{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:14px 4px 6px}
+
+/* card */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;overflow:hidden;transition:opacity .2s}
+.card.ov{border-left:3px solid var(--red)}
+.card.td{border-left:3px solid var(--yellow)}
+.card.dn{opacity:.5}
+.card.dn .ctitle{text-decoration:line-through}
+.cmain{display:flex;align-items:center;padding:12px 12px 10px;gap:10px}
+.chk{width:26px;height:26px;border-radius:50%;border:2px solid var(--border);background:transparent;cursor:pointer;flex-shrink:0;transition:.15s;display:flex;align-items:center;justify-content:center;color:transparent;font-size:14px}
+.chk:active{transform:scale(.88)}
+.card.dn .chk{background:var(--green);border-color:var(--green);color:#fff}
+.cbody{flex:1;min-width:0}
+.ctitle{font-size:15px;font-weight:500;line-height:1.35;word-break:break-word}
+.cmeta{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+.b{font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;display:inline-flex;align-items:center;gap:3px}
+.b.ov{background:rgba(239,68,68,.18);color:#fca5a5}
+.b.td{background:rgba(245,158,11,.2);color:#fcd34d}
+.b.sn{background:rgba(59,130,246,.15);color:#93c5fd}
+.b.up{background:rgba(100,116,139,.12);color:#94a3b8}
+.b.rp{background:rgba(168,85,247,.15);color:#d8b4fe}
+.b.rm{background:rgba(59,130,246,.12);color:#93c5fd}
+.b.ct{background:rgba(124,58,237,.12);color:#c4b5fd}
+.pdot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-right:2px}
+.ph{background:var(--red)}.pm{background:var(--yellow)}.pl{background:var(--green)}
+.cnote{font-size:12px;color:var(--muted);padding:0 12px 10px 48px;line-height:1.5}
+.cact{display:flex;border-top:1px solid var(--border)}
+.ab{flex:1;padding:9px 4px;font-size:12px;font-weight:600;border:none;background:transparent;cursor:pointer;transition:.15s;display:flex;align-items:center;justify-content:center;gap:4px;color:var(--muted)}
+.ab:active{background:rgba(255,255,255,.04)}
+.ab.ed{color:var(--blue)}.ab.sn{color:var(--yellow)}.ab.dl{color:var(--red)}
+.ab+.ab{border-left:1px solid var(--border)}
+
+/* empty */
+.empty{text-align:center;padding:60px 20px;color:var(--muted)}
+.empty .ic{font-size:52px;margin-bottom:12px}
+
+/* FAB */
+#fab{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom,0));right:20px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;cursor:pointer;font-size:26px;color:#fff;box-shadow:0 4px 20px rgba(124,58,237,.5);display:flex;align-items:center;justify-content:center;transition:transform .15s;z-index:100}
+#fab:active{transform:scale(.92)}
+
+/* overlay / modal */
+.ov2{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:200;display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
+.ov2.on{opacity:1;pointer-events:all}
+.modal{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:600px;max-height:93dvh;overflow-y:auto;padding:16px 16px calc(16px + env(safe-area-inset-bottom,0));transform:translateY(50px);transition:transform .25s cubic-bezier(.34,1.1,.64,1)}
+.ov2.on .modal{transform:translateY(0)}
+.handle{width:40px;height:4px;background:var(--border);border-radius:2px;margin:0 auto 16px}
+.modal h2{font-size:18px;font-weight:700;margin-bottom:16px}
+.fg{margin-bottom:14px}
+.fg label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:5px;letter-spacing:.05em}
+.fg input,.fg select,.fg textarea{width:100%;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;padding:10px 12px;outline:none;transition:.2s;font-family:inherit}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--accent)}
+.fg textarea{resize:vertical;min-height:70px}
+.fg select option{background:var(--surface)}
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pchips{display:flex;gap:8px}
+.pc{flex:1;padding:9px;border-radius:10px;border:2px solid var(--border);background:transparent;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;text-align:center;transition:.15s}
+.pc.sh{border-color:var(--red);background:rgba(239,68,68,.15);color:#fca5a5}
+.pc.sm{border-color:var(--yellow);background:rgba(245,158,11,.15);color:#fcd34d}
+.pc.sl{border-color:var(--green);background:rgba(34,197,94,.12);color:#86efac}
+.factions{display:flex;gap:10px;margin-top:20px}
+.bpri{flex:1;padding:13px;border-radius:12px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+.bpri:active{transform:scale(.98)}
+.bsec{padding:13px 20px;border-radius:12px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:15px;cursor:pointer}
+.snzgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:4px}
+.snzopt{padding:12px 4px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-weight:600;cursor:pointer;text-align:center}
+.snzopt:active{background:var(--accent);border-color:var(--accent)}
+
+/* toast */
+#toast{position:fixed;bottom:calc(88px + env(safe-area-inset-bottom,0));left:50%;transform:translateX(-50%) translateY(14px);background:#1e293b;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 18px;font-size:13px;white-space:nowrap;z-index:500;opacity:0;transition:.25s;pointer-events:none}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.spin{width:24px;height:24px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .6s linear infinite;margin:50px auto}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="htop">
+      <div class="title"><em>✓</em> Todo</div>
+      <div class="hstats" id="hs"></div>
+    </div>
+    <div class="tabs">
+      <div class="tab on" data-f="active">Aktiva</div>
+      <div class="tab" data-f="today">Idag</div>
+      <div class="tab" data-f="all">Alla</div>
+      <div class="tab" data-f="done">Klara</div>
+    </div>
+  </header>
+
+  <div class="sbar">
+    <span class="sico">🔍</span>
+    <input type="search" id="sq" placeholder="Sök uppgifter…" autocomplete="off">
+  </div>
+
+  <div id="lw"><div class="spin"></div></div>
+  <button id="fab">＋</button>
+</div>
+
+<!-- Add/Edit modal -->
+<div class="ov2" id="fo">
+  <div class="modal">
+    <div class="handle"></div>
+    <h2 id="ftitle">Ny uppgift</h2>
+    <form id="tf" autocomplete="off">
+      <input type="hidden" id="eid">
+      <div class="fg"><label>UPPGIFT *</label><input type="text" id="ft" placeholder="Vad behöver göras?" required></div>
+      <div class="frow">
+        <div class="fg"><label>DATUM</label><input type="text" id="fd" placeholder="imorgon / 15 april / om 3 dagar"></div>
+        <div class="fg"><label>PÅMINNELSE</label><input type="time" id="fr"></div>
+      </div>
+      <div class="frow">
+        <div class="fg">
+          <label>UPPREPNING</label>
+          <select id="frep">
+            <option value="">— ingen —</option>
+            <option value="daily">Varje dag</option>
+            <option value="weekdays">Vardagar mån–fre</option>
+            <option value="weekly">Varje vecka</option>
+            <option value="monthly">Varje månad</option>
+          </select>
+        </div>
+        <div class="fg"><label>KATEGORI</label><input type="text" id="fc" list="cl" placeholder="mat, hälsa…"><datalist id="cl"></datalist></div>
+      </div>
+      <div class="fg">
+        <label>PRIORITET</label>
+        <div class="pchips">
+          <button type="button" class="pc" data-p="hög">🔴 Hög</button>
+          <button type="button" class="pc" data-p="medel">🟡 Medel</button>
+          <button type="button" class="pc" data-p="låg">🟢 Låg</button>
+        </div>
+      </div>
+      <div class="fg"><label>ANTECKNING</label><textarea id="fn" placeholder="Extra info…"></textarea></div>
+      <div class="factions">
+        <button type="button" class="bsec" id="fcan">Avbryt</button>
+        <button type="submit" class="bpri" id="fsub">Lägg till</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Snooze modal -->
+<div class="ov2" id="so">
+  <div class="modal">
+    <div class="handle"></div>
+    <h2>Skjut upp</h2>
+    <div class="snzgrid">
+      <button class="snzopt" data-d="1">Imorgon</button>
+      <button class="snzopt" data-d="2">2 dagar</button>
+      <button class="snzopt" data-d="3">3 dagar</button>
+      <button class="snzopt" data-d="7">1 vecka</button>
+      <button class="snzopt" data-d="14">2 veckor</button>
+      <button class="snzopt" data-d="30">1 månad</button>
+    </div>
+    <div class="factions" style="margin-top:16px">
+      <button class="bsec" id="scan">Avbryt</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── storage ────────────────────────────────────────────────────────────────────
+const KEY = "todo_data_v1";
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {tasks:[], _id:1}; }
+  catch { return {tasks:[], _id:1}; }
+}
+function save(d) { localStorage.setItem(KEY, JSON.stringify(d)); }
+
+// ── date helpers ───────────────────────────────────────────────────────────────
+const WD = ["måndag","tisdag","onsdag","torsdag","fredag","lördag","söndag"];
+const MON = {januari:1,februari:2,mars:3,april:4,maj:5,juni:6,juli:7,
+  augusti:8,september:9,oktober:10,november:11,december:12,
+  jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,okt:10,nov:11,dec:12};
+const RLAB = {daily:"varje dag",weekly:"varje vecka",monthly:"varje månad",weekdays:"vardagar"};
+
+function todayStr() { return new Date().toISOString().slice(0,10); }
+
+function parseDate(s) {
+  s = s.trim().toLowerCase();
+  const t = new Date(); t.setHours(0,0,0,0);
+  const add = n => { const d=new Date(t); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+  if (s==="idag"||s==="nu")    return todayStr();
+  if (s==="imorgon")           return add(1);
+  if (s==="övermorgon")        return add(2);
+  if (s==="nästa vecka")       return add(7);
+  const wi = WD.indexOf(s);
+  if (wi>=0) { let delta=(wi-t.getDay()+1+7)%7||7; return add(delta); }
+  // "nästa måndag"
+  let m = s.match(/^nästa\s+(\w+)/);
+  if (m) { const i=WD.indexOf(m[1]); if(i>=0){let d=(i-t.getDay()+1+7)%7||7; return add(d);} }
+  // "om N dagar/veckor/månader"
+  m = s.match(/^om\s+(\d+)\s+(dag|dagar|vecka|veckor|månad|månader)/);
+  if (m) {
+    const n=+m[1], u=m[2];
+    if (u.startsWith("dag")) return add(n);
+    if (u.startsWith("vec")) return add(n*7);
+    if (u.startsWith("mån")) {
+      const d2=new Date(t); d2.setMonth(d2.getMonth()+n); return d2.toISOString().slice(0,10);
+    }
+  }
+  // "15 april" / "1 jan [2027]"
+  m = s.match(/^(\d{1,2})\s+([a-zåäö]+)(?:\s+(\d{4}))?$/);
+  if (m && MON[m[2]]) {
+    const yr = m[3]?+m[3]:t.getFullYear();
+    let d2=new Date(yr,MON[m[2]]-1,+m[1]);
+    if (!m[3] && d2 < t) d2=new Date(yr+1,MON[m[2]]-1,+m[1]);
+    return d2.toISOString().slice(0,10);
+  }
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD/MM or DD/MM/YYYY
+  m = s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/);
+  if (m) {
+    const yr=m[3]?+m[3]:t.getFullYear();
+    let d2=new Date(yr,+m[2]-1,+m[1]);
+    if (!m[3] && d2 < t) d2=new Date(yr+1,+m[2]-1,+m[1]);
+    return d2.toISOString().slice(0,10);
+  }
+  throw new Error(`Förstår inte datumet "${s}"`);
+}
+
+function nextOccurrence(task) {
+  const r = task.repeat;
+  const base = new Date((task.lastDone||task.due||todayStr())+"T00:00:00");
+  if (r==="daily")    { base.setDate(base.getDate()+1); return base.toISOString().slice(0,10); }
+  if (r==="weekly")   { base.setDate(base.getDate()+7); return base.toISOString().slice(0,10); }
+  if (r==="monthly")  { base.setMonth(base.getMonth()+1); return base.toISOString().slice(0,10); }
+  if (r==="weekdays") {
+    base.setDate(base.getDate()+1);
+    while(base.getDay()===0||base.getDay()===6) base.setDate(base.getDate()+1);
+    return base.toISOString().slice(0,10);
+  }
+  return null;
+}
+
+function dueLabel(due) {
+  if (!due) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const d = new Date(due+"T00:00:00");
+  const diff = Math.round((d-today)/86400000);
+  if (diff < 0)  return { text:`Försenad ${Math.abs(diff)}d`, cls:"ov" };
+  if (diff===0)  return { text:"★ Idag",     cls:"td" };
+  if (diff===1)  return { text:"Imorgon",    cls:"sn" };
+  if (diff<=7)   return { text:`Om ${diff}d (${WD[d.getDay()===0?6:d.getDay()-1]})`, cls:"sn" };
+  return { text:due, cls:"up" };
+}
+
+// ── state ──────────────────────────────────────────────────────────────────────
+let curF   = "active";
+let searchQ = "";
+let selPrio = "";
+let snoozeId = null;
+
+// ── render ─────────────────────────────────────────────────────────────────────
+function render() {
+  const data  = load();
+  let   tasks = data.tasks;
+  const td    = todayStr();
+
+  // filter
+  if (curF==="active") tasks = tasks.filter(t => !t.done);
+  else if (curF==="today") tasks = tasks.filter(t => !t.done && t.due && t.due<=td);
+  else if (curF==="done")  tasks = tasks.filter(t => t.done);
+  // "all" = active only (no done in general view to reduce clutter)
+
+  // search
+  if (searchQ) {
+    const q = searchQ.toLowerCase();
+    tasks = tasks.filter(t =>
+      (t.title||"").toLowerCase().includes(q) ||
+      (t.note||"").toLowerCase().includes(q) ||
+      (t.category||"").toLowerCase().includes(q)
+    );
+  }
+
+  // header stats
+  const all = data.tasks;
+  const active = all.filter(t=>!t.done);
+  const ov = active.filter(t=>t.due && t.due<td);
+  const hs = document.getElementById("hs");
+  hs.innerHTML = "";
+  if (ov.length)     hs.innerHTML += `<span class="chip r">⚠ ${ov.length}</span>`;
+  const tot2 = active.filter(t=>t.due===td).length;
+  if (tot2)          hs.innerHTML += `<span class="chip">${tot2} idag</span>`;
+  hs.innerHTML += `<span class="chip g">${active.length}</span>`;
+
+  // sort
+  tasks.sort((a,b) => {
+    const rank = t => t.done?3 : (!t.due?2 : t.due<td?-1 : 0);
+    const ra=rank(a), rb=rank(b);
+    if (ra!==rb) return ra-rb;
+    if (a.due && b.due) return a.due<b.due?-1:1;
+    return 0;
+  });
+
+  const lw = document.getElementById("lw");
+  if (!tasks.length) {
+    lw.innerHTML = `<div class="empty"><div class="ic">✅</div><p>${searchQ?"Inga träffar.":"Inga uppgifter här!"}</p></div>`;
+    return;
+  }
+
+  const overdue  = tasks.filter(t=>!t.done&&t.due&&t.due<td);
+  const today2   = tasks.filter(t=>!t.done&&t.due===td);
+  const upcoming = tasks.filter(t=>!t.done&&t.due&&t.due>td);
+  const nodate   = tasks.filter(t=>!t.done&&!t.due);
+  const done2    = tasks.filter(t=>t.done);
+
+  let html = "";
+  if (overdue.length)  html += sec("⚠ Försenade", overdue);
+  if (today2.length)   html += sec("★ Idag",       today2);
+  if (upcoming.length) html += sec("Kommande",      upcoming);
+  if (nodate.length)   html += sec("Utan datum",    nodate);
+  if (done2.length)    html += sec("Klara",         done2);
+  lw.innerHTML = html;
+
+  // bind
+  lw.querySelectorAll(".chk").forEach(b => b.addEventListener("click", () => toggleDone(+b.dataset.id)));
+  lw.querySelectorAll(".ab.ed").forEach(b => b.addEventListener("click", () => openEdit(+b.dataset.id)));
+  lw.querySelectorAll(".ab.sn").forEach(b => b.addEventListener("click", () => { snoozeId=+b.dataset.id; openOv("so"); }));
+  lw.querySelectorAll(".ab.dl").forEach(b => b.addEventListener("click", () => deleteTask(+b.dataset.id)));
+}
+
+function sec(label, tasks) {
+  return `<div class="slabel">${label}</div>` + tasks.map(card).join("");
+}
+
+function card(t) {
+  const td = todayStr();
+  const ov = !t.done && t.due && t.due<td;
+  const isToday = !t.done && t.due===td;
+  const cls = ["card", ov?"ov":"", isToday?"td":"", t.done?"dn":""].filter(Boolean).join(" ");
+  const dl = t.due ? dueLabel(t.due) : null;
+  const pdot = t.priority ? `<span class="pdot p${t.priority[0]}"></span>` : "";
+  let badges = "";
+  if (dl) badges += `<span class="b ${dl.cls}">${e(dl.text)}</span>`;
+  if (t.remindTime)  badges += `<span class="b rm">⏰ ${e(t.remindTime)}</span>`;
+  if (t.repeat)      badges += `<span class="b rp">↻ ${RLAB[t.repeat]||t.repeat}</span>`;
+  if (t.category)    badges += `<span class="b ct">${e(t.category)}</span>`;
+  const note = t.note ? `<div class="cnote">📝 ${e(t.note)}</div>` : "";
+  const acts = t.done
+    ? `<button class="ab ed" data-id="${t.id}">✏ Redigera</button><button class="ab dl" data-id="${t.id}">🗑 Ta bort</button>`
+    : `<button class="ab ed" data-id="${t.id}">✏ Redigera</button><button class="ab sn" data-id="${t.id}">⏭ Skjut upp</button><button class="ab dl" data-id="${t.id}">🗑 Ta bort</button>`;
+  return `<div class="${cls}">
+  <div class="cmain">
+    <button class="chk" data-id="${t.id}">${t.done?"✓":""}</button>
+    <div class="cbody">
+      <div class="ctitle">${pdot}${e(t.title)}</div>
+      ${badges?`<div class="cmeta">${badges}</div>`:""}
+    </div>
+  </div>${note}
+  <div class="cact">${acts}</div>
+</div>`;
+}
+
+// ── actions ────────────────────────────────────────────────────────────────────
+function toggleDone(id) {
+  const data = load();
+  const t = data.tasks.find(x=>x.id===id);
+  if (!t) return;
+  if (t.repeat && !t.done) {
+    t.lastDone = todayStr();
+    t.due = nextOccurrence(t);
+    toast("✓ Klar! Nästa: "+t.due);
+  } else {
+    t.done = !t.done;
+    if (t.done) { t.lastDone=todayStr(); toast("✓ Klar!"); }
+    else toast("Återöppnad");
+  }
+  save(data); render();
+}
+
+function deleteTask(id) {
+  const data = load();
+  const t = data.tasks.find(x=>x.id===id);
+  if (!t) return;
+  if (!confirm(`Ta bort "${t.title}"?`)) return;
+  data.tasks = data.tasks.filter(x=>x.id!==id);
+  save(data); toast("Borttagen"); render();
+}
+
+// ── form ───────────────────────────────────────────────────────────────────────
+function openAdd() {
+  document.getElementById("ftitle").textContent = "Ny uppgift";
+  document.getElementById("fsub").textContent   = "Lägg till";
+  document.getElementById("tf").reset();
+  document.getElementById("eid").value = "";
+  selPrio = ""; updatePrio();
+  openOv("fo");
+  setTimeout(()=>document.getElementById("ft").focus(), 320);
+}
+
+function openEdit(id) {
+  const data = load();
+  const t = data.tasks.find(x=>x.id===id);
+  if (!t) return;
+  document.getElementById("ftitle").textContent = "Redigera";
+  document.getElementById("fsub").textContent   = "Spara";
+  document.getElementById("eid").value   = id;
+  document.getElementById("ft").value   = t.title||"";
+  document.getElementById("fd").value   = t.due||"";
+  document.getElementById("fr").value   = t.remindTime||"";
+  document.getElementById("frep").value = t.repeat||"";
+  document.getElementById("fc").value   = t.category||"";
+  document.getElementById("fn").value   = t.note||"";
+  selPrio = t.priority||""; updatePrio();
+  openOv("fo");
+}
+
+document.getElementById("tf").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const id = document.getElementById("eid").value;
+  const rawDue = document.getElementById("fd").value.trim();
+  let due = null;
+  if (rawDue) {
+    try { due = parseDate(rawDue); }
+    catch(err) { toast("⚠ "+err.message, 4000); return; }
+  }
+  const data = load();
+  if (id) {
+    const t = data.tasks.find(x=>x.id===+id);
+    if (t) {
+      t.title      = document.getElementById("ft").value.trim();
+      t.due        = due;
+      t.remindTime = document.getElementById("fr").value||null;
+      t.repeat     = document.getElementById("frep").value||null;
+      t.category   = document.getElementById("fc").value.trim()||null;
+      t.note       = document.getElementById("fn").value.trim()||null;
+      t.priority   = selPrio||null;
+    }
+    toast("Uppdaterad ✓");
+  } else {
+    const t = {
+      id: data._id++,
+      title:      document.getElementById("ft").value.trim(),
+      created:    todayStr(),
+      done:       false,
+      due,
+      remindTime: document.getElementById("fr").value||null,
+      repeat:     document.getElementById("frep").value||null,
+      priority:   selPrio||null,
+      category:   document.getElementById("fc").value.trim()||null,
+      note:       document.getElementById("fn").value.trim()||null,
+      lastDone:   null,
+    };
+    if (t.repeat && !t.due) t.due = todayStr();
+    data.tasks.push(t);
+    toast("Uppgift tillagd ✓");
+  }
+  save(data); closeOv("fo"); render(); updateCatlist();
+});
+
+// snooze
+document.querySelectorAll(".snzopt").forEach(b => b.addEventListener("click", () => {
+  if (!snoozeId) return;
+  const data = load();
+  const t = data.tasks.find(x=>x.id===snoozeId);
+  if (t) {
+    const base = new Date((t.due||todayStr())+"T00:00:00");
+    base.setDate(base.getDate()+ +b.dataset.d);
+    t.due = base.toISOString().slice(0,10);
+    save(data); toast("Uppskjuten ⏭");
+  }
+  closeOv("so"); render();
+}));
+document.getElementById("scan").addEventListener("click", ()=>closeOv("so"));
+
+// prio chips
+document.querySelectorAll(".pc").forEach(b => b.addEventListener("click", ()=>{
+  selPrio = selPrio===b.dataset.p ? "" : b.dataset.p;
+  updatePrio();
+}));
+function updatePrio() {
+  document.querySelectorAll(".pc").forEach(b => {
+    b.className = "pc" + (selPrio===b.dataset.p ? " s"+b.dataset.p[0] : "");
+  });
+}
+
+// tabs
+document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", ()=>{
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("on"));
+  tab.classList.add("on");
+  curF = tab.dataset.f==="all" ? "active" : tab.dataset.f;
+  render();
+}));
+
+// search
+document.getElementById("sq").addEventListener("input", e=>{
+  searchQ = e.target.value.trim(); render();
+});
+
+// FAB
+document.getElementById("fab").addEventListener("click", openAdd);
+
+// overlays
+function openOv(id)  { document.getElementById(id).classList.add("on"); }
+function closeOv(id) { document.getElementById(id).classList.remove("on"); }
+document.querySelectorAll(".ov2").forEach(el =>
+  el.addEventListener("click", e=>{ if(e.target===el) closeOv(el.id); })
+);
+document.getElementById("fcan").addEventListener("click", ()=>closeOv("fo"));
+
+// catlist
+function updateCatlist() {
+  const data = load();
+  const cats = [...new Set(data.tasks.map(t=>t.category).filter(Boolean))];
+  document.getElementById("cl").innerHTML = cats.map(c=>`<option value="${e(c)}">`).join("");
+}
+
+// toast
+let tt;
+function toast(msg, dur=2500) {
+  const el = document.getElementById("toast");
+  el.textContent = msg; el.classList.add("on");
+  clearTimeout(tt); tt = setTimeout(()=>el.classList.remove("on"), dur);
+}
+
+// pull to refresh
+let ty=0;
+const lw2 = document.getElementById("lw");
+lw2.addEventListener("touchstart", e=>{ty=e.touches[0].clientY},{passive:true});
+lw2.addEventListener("touchend", e=>{
+  if(e.changedTouches[0].clientY-ty>70 && lw2.scrollTop===0){render();toast("Uppdaterat");}
+},{passive:true});
+
+function e(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
+
+// PWA service worker
+if("serviceWorker" in navigator)
+  navigator.serviceWorker.register("sw.js").catch(()=>{});
+
+// init
+render(); updateCatlist();
+</script>
+</body>
+</html>
