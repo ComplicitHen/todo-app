@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.todo.json
+todo_export_*.md
+*.log

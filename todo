@@ -1,0 +1,743 @@
+#!/usr/bin/env python3
+"""
+Todo-app med påminnelser — Termux-optimerad
+Lagrar data i ~/.todo.json
+"""
+
+import json
+import re
+import subprocess
+from datetime import datetime, date, timedelta
+from pathlib import Path
+
+DATA_FILE = Path.home() / ".todo.json"
+
+# ── ANSI-färger ────────────────────────────────────────────────────────────────
+R       = "\033[0m"
+BOLD    = "\033[1m"
+RED     = "\033[91m"
+GREEN   = "\033[92m"
+YELLOW  = "\033[93m"
+BLUE    = "\033[94m"
+CYAN    = "\033[96m"
+DIM     = "\033[2m"
+MAGENTA = "\033[95m"
+WHITE   = "\033[97m"
+
+REPEAT_LABELS = {
+    "daily":    "varje dag",
+    "weekly":   "varje vecka",
+    "monthly":  "varje månad",
+    "weekdays": "vardagar (mån–fre)",
+}
+PRIO_COLOR = {"hög": RED, "medel": YELLOW, "låg": GREEN}
+WEEKDAYS   = ["måndag","tisdag","onsdag","torsdag","fredag","lördag","söndag"]
+MONTHS_SV  = {
+    "januari":1,"februari":2,"mars":3,"april":4,"maj":5,"juni":6,
+    "juli":7,"augusti":8,"september":9,"oktober":10,"november":11,"december":12,
+    "jan":1,"feb":2,"mar":3,"apr":4,"jun":6,"jul":7,"aug":8,
+    "sep":9,"okt":10,"nov":11,"dec":12,
+}
+
+# ── data ───────────────────────────────────────────────────────────────────────
+
+def load() -> dict:
+    if DATA_FILE.exists():
+        try:
+            return json.loads(DATA_FILE.read_text())
+        except Exception:
+            pass
+    return {"tasks": [], "_next_id": 1}
+
+def save(data: dict):
+    DATA_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+def today_str() -> str:
+    return date.today().isoformat()
+
+# ── datumtolkning ──────────────────────────────────────────────────────────────
+
+def parse_date(s: str) -> str:
+    """
+    Förstår: idag, imorgon, måndag…söndag, nästa vecka, om N dag(ar)/vecka(or)/månad(er),
+    YYYY-MM-DD, DD/MM, DD/MM/YYYY, "15 april", "1 jan"
+    """
+    s = s.strip().lower()
+    today = date.today()
+
+    # enkla alias
+    if s in ("idag", "nu"):
+        return today.isoformat()
+    if s in ("imorgon",):
+        return (today + timedelta(days=1)).isoformat()
+    if s == "övermorgon":
+        return (today + timedelta(days=2)).isoformat()
+    if s == "nästa vecka":
+        return (today + timedelta(weeks=1)).isoformat()
+    if s == "nästa månad":
+        m = today.month + 1
+        y = today.year + (m - 1) // 12
+        m = (m - 1) % 12 + 1
+        try:
+            return today.replace(year=y, month=m).isoformat()
+        except ValueError:
+            return today.replace(year=y, month=m, day=28).isoformat()
+
+    # veckodag
+    if s in WEEKDAYS:
+        target = WEEKDAYS.index(s)
+        delta = (target - today.weekday()) % 7 or 7
+        return (today + timedelta(days=delta)).isoformat()
+
+    # "nästa måndag" etc
+    m = re.match(r"nästa\s+(\w+)", s)
+    if m and m.group(1) in WEEKDAYS:
+        target = WEEKDAYS.index(m.group(1))
+        delta = (target - today.weekday()) % 7 or 7
+        return (today + timedelta(days=delta)).isoformat()
+
+    # "om N dagar/veckor/månader"
+    m = re.match(r"om\s+(\d+)\s+(dag|dagar|vecka|veckor|månad|månader)", s)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2)
+        if "dag" in unit:
+            return (today + timedelta(days=n)).isoformat()
+        if "vecka" in unit or "veckor" in unit:
+            return (today + timedelta(weeks=n)).isoformat()
+        if "månad" in unit:
+            mo = today.month + n
+            yr = today.year + (mo - 1) // 12
+            mo = (mo - 1) % 12 + 1
+            try:
+                return today.replace(year=yr, month=mo).isoformat()
+            except ValueError:
+                return today.replace(year=yr, month=mo, day=28).isoformat()
+
+    # "15 april" / "1 jan"
+    m = re.match(r"(\d{1,2})\s+([a-zåäö]+)(?:\s+(\d{4}))?$", s)
+    if m:
+        day = int(m.group(1))
+        mon = MONTHS_SV.get(m.group(2))
+        yr  = int(m.group(3)) if m.group(3) else today.year
+        if mon:
+            d = date(yr, mon, day)
+            if d < today and not m.group(3):
+                d = date(yr + 1, mon, day)
+            return d.isoformat()
+
+    # YYYY-MM-DD
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        pass
+
+    # DD/MM eller DD/MM/YYYY
+    try:
+        return datetime.strptime(s, "%d/%m/%Y").date().isoformat()
+    except ValueError:
+        pass
+    try:
+        d = datetime.strptime(s, "%d/%m").date().replace(year=today.year)
+        if d < today:
+            d = d.replace(year=today.year + 1)
+        return d.isoformat()
+    except ValueError:
+        pass
+
+    raise ValueError(
+        f"Förstår inte '{s}'.\n"
+        "Prova: idag, imorgon, måndag, om 3 dagar, om 2 veckor, "
+        "15 april, 1/4, YYYY-MM-DD"
+    )
+
+# ── hjälpfunktioner ────────────────────────────────────────────────────────────
+
+def next_occurrence(task: dict) -> str | None:
+    repeat   = task.get("repeat")
+    base_str = task.get("last_done") or task.get("due") or today_str()
+    base     = date.fromisoformat(base_str)
+    if repeat == "daily":
+        return (base + timedelta(days=1)).isoformat()
+    if repeat == "weekly":
+        return (base + timedelta(weeks=1)).isoformat()
+    if repeat == "monthly":
+        mo = base.month + 1
+        yr = base.year + (mo - 1) // 12
+        mo = (mo - 1) % 12 + 1
+        try:
+            return base.replace(year=yr, month=mo).isoformat()
+        except ValueError:
+            return base.replace(year=yr, month=mo, day=28).isoformat()
+    if repeat == "weekdays":
+        d = base + timedelta(days=1)
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+        return d.isoformat()
+    return None
+
+def is_due_today(task: dict) -> bool:
+    due = task.get("due")
+    return bool(due and due <= today_str())
+
+def send_notification(title: str, message: str):
+    try:
+        subprocess.run(
+            ["termux-notification", "--title", title, "--content", message,
+             "--priority", "high"],
+            timeout=5, check=True
+        )
+    except Exception:
+        pass
+
+def days_until(due_str: str) -> int:
+    return (date.fromisoformat(due_str) - date.today()).days
+
+def format_task(task: dict, show_id=True, show_note=False) -> str:
+    tid   = f"{CYAN}#{task['id']:<3}{R}" if show_id else ""
+    done  = task.get("done", False)
+    check = f"{GREEN}✓{R}" if done else f"{YELLOW}○{R}"
+    title = task["title"]
+    if done:
+        title = f"{DIM}{title}{R}"
+    else:
+        title = f"{BOLD}{title}{R}"
+
+    parts = [tid, check, title]
+
+    prio = task.get("priority")
+    if prio:
+        parts.append(f"{PRIO_COLOR.get(prio, '')}[{prio}]{R}")
+
+    due = task.get("due")
+    if due:
+        d  = date.fromisoformat(due)
+        td = date.today()
+        diff = (d - td).days
+        if d < td and not done:
+            parts.append(f"{RED}FÖRSENAD {due} ({abs(diff)}d sedan){R}")
+        elif d == td:
+            parts.append(f"{YELLOW}★ idag{R}")
+        elif diff == 1:
+            parts.append(f"{YELLOW}imorgon{R}")
+        elif diff <= 7:
+            parts.append(f"{BLUE}om {diff}d ({WEEKDAYS[d.weekday()]}){R}")
+        else:
+            parts.append(f"{DIM}{due}{R}")
+
+    remind = task.get("remind_time")
+    if remind:
+        parts.append(f"{BLUE}⏰{remind}{R}")
+
+    repeat = task.get("repeat")
+    if repeat:
+        parts.append(f"{MAGENTA}↻{REPEAT_LABELS.get(repeat, repeat)}{R}")
+
+    cat = task.get("category")
+    if cat:
+        parts.append(f"{DIM}[{cat}]{R}")
+
+    line = "  ".join(parts)
+
+    # visa anteckning om --note-flagga eller show_note
+    note = task.get("note")
+    if note and show_note:
+        line += f"\n       {DIM}📝 {note}{R}"
+
+    return line
+
+# ── kommandon ──────────────────────────────────────────────────────────────────
+
+def cmd_add(args):
+    data = load()
+    task = {
+        "id":          data["_next_id"],
+        "title":       args.title,
+        "created":     today_str(),
+        "done":        False,
+        "due":         None,
+        "remind_time": None,
+        "repeat":      None,
+        "priority":    None,
+        "category":    None,
+        "note":        None,
+        "last_done":   None,
+    }
+    data["_next_id"] += 1
+
+    if args.due:
+        task["due"] = parse_date(args.due)
+    if args.remind:
+        task["remind_time"] = args.remind
+    if args.repeat:
+        task["repeat"] = args.repeat
+        if not task["due"]:
+            task["due"] = today_str()
+    if args.priority:
+        task["priority"] = args.priority
+    if args.category:
+        task["category"] = args.category
+    if args.note:
+        task["note"] = args.note
+
+    data["tasks"].append(task)
+    save(data)
+    print(f"{GREEN}Lagt till:{R} {format_task(task, show_note=True)}")
+
+def cmd_list(args):
+    data  = load()
+    tasks = data["tasks"]
+
+    if getattr(args, "today", False):
+        tasks = [t for t in tasks if not t.get("done") and is_due_today(t)]
+    elif getattr(args, "overdue", False):
+        tasks = [t for t in tasks if not t.get("done") and
+                 t.get("due") and t["due"] < today_str()]
+    elif not getattr(args, "all", False):
+        tasks = [t for t in tasks if not t.get("done")]
+
+    cat_filter = getattr(args, "category", None)
+    if cat_filter:
+        tasks = [t for t in tasks if t.get("category") == cat_filter]
+
+    show_note = getattr(args, "notes", False)
+
+    if not tasks:
+        print(f"{DIM}Inga uppgifter att visa.{R}")
+        return
+
+    overdue    = [t for t in tasks if t.get("due") and t["due"] < today_str() and not t.get("done")]
+    today_list = [t for t in tasks if t.get("due") == today_str() and not t.get("done")]
+    upcoming   = [t for t in tasks if t.get("due") and t["due"] > today_str() and not t.get("done")]
+    no_date    = [t for t in tasks if not t.get("due") and not t.get("done")]
+    done_list  = [t for t in tasks if t.get("done")]
+
+    # sortera kommande på datum
+    upcoming.sort(key=lambda t: t["due"])
+
+    def section(header, items):
+        if items:
+            print(f"\n{header}")
+            for t in items:
+                print(f"  {format_task(t, show_note=show_note)}")
+
+    section(f"{RED}{BOLD}⚠  Försenade{R}", overdue)
+    section(f"{YELLOW}{BOLD}★  Idag{R}", today_list)
+    section(f"{BLUE}{BOLD}   Kommande{R}", upcoming)
+    section(f"{DIM}   Utan datum{R}", no_date)
+    if getattr(args, "all", False):
+        section(f"{GREEN}   Klara{R}", done_list)
+
+    active = len([t for t in data["tasks"] if not t.get("done")])
+    print(f"\n{DIM}Aktiva: {active}  |  Klara: {len([t for t in data['tasks'] if t.get('done')])}{R}")
+
+def cmd_done(args):
+    data = load()
+    for task in data["tasks"]:
+        if task["id"] == args.id:
+            if task.get("repeat"):
+                nxt = next_occurrence(task)
+                task["last_done"] = today_str()
+                task["due"]       = nxt
+                print(f"{GREEN}Klar!{R}  Nästa: {CYAN}{nxt}{R}  —  {task['title']}")
+            else:
+                task["done"]      = True
+                task["last_done"] = today_str()
+                print(f"{GREEN}✓ Klar:{R} {task['title']}")
+            save(data)
+            return
+    print(f"{RED}Hittade inte #{args.id}{R}")
+
+def cmd_delete(args):
+    data   = load()
+    before = len(data["tasks"])
+    task   = next((t for t in data["tasks"] if t["id"] == args.id), None)
+    if task:
+        confirm = input(f"Ta bort '{task['title']}'? (j/N) ").strip().lower()
+        if confirm != "j":
+            print("Avbruten.")
+            return
+    data["tasks"] = [t for t in data["tasks"] if t["id"] != args.id]
+    if len(data["tasks"]) < before:
+        save(data)
+        print(f"{GREEN}Borttagen.{R}")
+    else:
+        print(f"{RED}Hittade inte #{args.id}{R}")
+
+def cmd_edit(args):
+    data = load()
+    for task in data["tasks"]:
+        if task["id"] == args.id:
+            if args.title:
+                task["title"] = args.title
+            if args.due:
+                task["due"] = parse_date(args.due)
+            if args.remind:
+                task["remind_time"] = args.remind if args.remind != "ingen" else None
+            if args.repeat:
+                task["repeat"] = args.repeat if args.repeat != "ingen" else None
+            if args.priority:
+                task["priority"] = args.priority if args.priority != "ingen" else None
+            if args.category:
+                task["category"] = args.category if args.category != "ingen" else None
+            if args.note:
+                task["note"] = args.note if args.note != "ingen" else None
+            save(data)
+            print(f"{GREEN}Uppdaterad:{R} {format_task(task, show_note=True)}")
+            return
+    print(f"{RED}Hittade inte #{args.id}{R}")
+
+def cmd_snooze(args):
+    data = load()
+    unit = args.unit or "dagar"
+    for task in data["tasks"]:
+        if task["id"] == args.id:
+            n   = args.days
+            cur = task.get("due") or today_str()
+            d   = date.fromisoformat(cur)
+            if "vecka" in unit:
+                d += timedelta(weeks=n)
+            elif "månad" in unit:
+                mo = d.month + n
+                yr = d.year + (mo - 1) // 12
+                mo = (mo - 1) % 12 + 1
+                try:
+                    d = d.replace(year=yr, month=mo)
+                except ValueError:
+                    d = d.replace(year=yr, month=mo, day=28)
+            else:
+                d += timedelta(days=n)
+            task["due"] = d.isoformat()
+            save(data)
+            print(f"{YELLOW}Uppskjuten:{R} '{task['title']}'  →  {CYAN}{d.isoformat()}{R}")
+            return
+    print(f"{RED}Hittade inte #{args.id}{R}")
+
+def cmd_search(args):
+    data    = load()
+    query   = args.query.lower()
+    results = []
+    for task in data["tasks"]:
+        haystack = " ".join([
+            task.get("title",""),
+            task.get("note","") or "",
+            task.get("category","") or "",
+        ]).lower()
+        if query in haystack:
+            results.append(task)
+
+    if not results:
+        print(f"{DIM}Inga träffar för '{args.query}'.{R}")
+        return
+
+    print(f"{BOLD}Sökning: '{args.query}'  —  {len(results)} träff(ar){R}\n")
+    for t in results:
+        print(f"  {format_task(t, show_note=True)}")
+
+def cmd_note(args):
+    """Visa eller sätt anteckning på en uppgift."""
+    data = load()
+    for task in data["tasks"]:
+        if task["id"] == args.id:
+            if args.text:
+                task["note"] = args.text
+                save(data)
+                print(f"{GREEN}Anteckning sparad.{R}")
+            else:
+                note = task.get("note")
+                if note:
+                    print(f"{BOLD}{task['title']}{R}\n{DIM}📝 {note}{R}")
+                else:
+                    print(f"{DIM}Ingen anteckning.{R}")
+            return
+    print(f"{RED}Hittade inte #{args.id}{R}")
+
+def cmd_stats(args):
+    data  = load()
+    tasks = data["tasks"]
+    today = today_str()
+
+    total    = len(tasks)
+    active   = [t for t in tasks if not t.get("done")]
+    done     = [t for t in tasks if t.get("done")]
+    overdue  = [t for t in active if t.get("due") and t["due"] < today]
+    due_tod  = [t for t in active if t.get("due") == today]
+    recurring = [t for t in active if t.get("repeat")]
+    with_note = [t for t in tasks if t.get("note")]
+
+    print(f"\n{BOLD}{WHITE}━━━  Statistik  ━━━{R}")
+    print(f"  Totalt uppgifter  : {CYAN}{total}{R}")
+    print(f"  Aktiva            : {YELLOW}{len(active)}{R}")
+    print(f"  Klara             : {GREEN}{len(done)}{R}")
+    print(f"  Försenade         : {RED}{len(overdue)}{R}")
+    print(f"  Förfaller idag    : {YELLOW}{len(due_tod)}{R}")
+    print(f"  Återkommande      : {MAGENTA}{len(recurring)}{R}")
+    print(f"  Med anteckningar  : {BLUE}{len(with_note)}{R}")
+
+    # per kategori
+    cats = {}
+    for t in active:
+        c = t.get("category") or "(ingen kategori)"
+        cats[c] = cats.get(c, 0) + 1
+    if cats:
+        print(f"\n  {BOLD}Per kategori:{R}")
+        for c, n in sorted(cats.items(), key=lambda x: -x[1]):
+            bar = "█" * n
+            print(f"    {CYAN}{c:<18}{R} {bar} {n}")
+
+    # per prioritet
+    prios = {"hög": 0, "medel": 0, "låg": 0, "(ingen)": 0}
+    for t in active:
+        p = t.get("priority") or "(ingen)"
+        prios[p] = prios.get(p, 0) + 1
+    print(f"\n  {BOLD}Per prioritet:{R}")
+    for p, n in prios.items():
+        col = PRIO_COLOR.get(p, DIM)
+        print(f"    {col}{p:<10}{R} {n}")
+
+    # nästa 7 dagarna
+    upcoming = []
+    for i in range(7):
+        d = (date.today() + timedelta(days=i)).isoformat()
+        day_tasks = [t for t in active if t.get("due") == d]
+        if day_tasks:
+            label = ["idag","imorgon"][i] if i < 2 else d
+            upcoming.append((label, day_tasks))
+    if upcoming:
+        print(f"\n  {BOLD}Närmaste 7 dagarna:{R}")
+        for label, day_tasks in upcoming:
+            print(f"    {CYAN}{label}{R}: {', '.join(t['title'] for t in day_tasks)}")
+    print()
+
+def cmd_export(args):
+    data  = load()
+    tasks = data["tasks"]
+    today = today_str()
+    out   = Path(args.file) if args.file else Path.home() / f"todo_export_{today}.md"
+
+    lines = [f"# Todo-lista — {today}\n"]
+
+    sections = [
+        ("Försenade",   [t for t in tasks if not t.get("done") and t.get("due") and t["due"] < today]),
+        ("Idag",        [t for t in tasks if not t.get("done") and t.get("due") == today]),
+        ("Kommande",    sorted([t for t in tasks if not t.get("done") and t.get("due") and t["due"] > today], key=lambda x: x["due"])),
+        ("Utan datum",  [t for t in tasks if not t.get("done") and not t.get("due")]),
+        ("Klara",       [t for t in tasks if t.get("done")]),
+    ]
+
+    for header, items in sections:
+        if not items:
+            continue
+        lines.append(f"\n## {header}\n")
+        for t in items:
+            check = "[x]" if t.get("done") else "[ ]"
+            meta  = []
+            if t.get("due"):
+                meta.append(f"📅 {t['due']}")
+            if t.get("remind_time"):
+                meta.append(f"⏰ {t['remind_time']}")
+            if t.get("repeat"):
+                meta.append(f"↻ {REPEAT_LABELS.get(t['repeat'], t['repeat'])}")
+            if t.get("priority"):
+                meta.append(f"Prio: {t['priority']}")
+            if t.get("category"):
+                meta.append(f"[{t['category']}]")
+            meta_str = "  " + " · ".join(meta) if meta else ""
+            lines.append(f"- {check} **{t['title']}**{meta_str}")
+            if t.get("note"):
+                lines.append(f"  > {t['note']}")
+
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print(f"{GREEN}Exporterad till:{R} {out}")
+
+def cmd_remind(args):
+    data         = load()
+    current_time = datetime.now().strftime("%H:%M")
+    today        = today_str()
+    notified     = 0
+
+    for task in data["tasks"]:
+        if task.get("done"):
+            continue
+        due    = task.get("due")
+        remind = task.get("remind_time")
+        if not due or due > today:
+            continue
+        if remind and remind > current_time:
+            continue
+        msg = task["title"]
+        if due < today:
+            msg += f" (försenad sedan {due})"
+        send_notification("📋 Todo", msg)
+        print(f"{YELLOW}Påminnelse:{R} {task['title']}")
+        notified += 1
+
+    if notified == 0:
+        print(f"{DIM}Inga påminnelser just nu.{R}")
+
+def cmd_setup(args):
+    print(f"\n{BOLD}{WHITE}━━━  Konfiguration  ━━━{R}\n")
+    print(f"{BOLD}1. Android-notiser (termux-api){R}")
+    print(f"   {CYAN}pkg install termux-api{R}")
+    print(f"   Installera {YELLOW}Termux:API{R}-appen från F-Droid\n")
+    print(f"{BOLD}2. Automatiska påminnelser (cron){R}")
+    print(f"   {CYAN}pkg install cronie{R}")
+    print(f"   {CYAN}crond{R}  # starta demonen")
+    print(f"   {CYAN}crontab -e{R}  # öppna editor, lägg till raden nedan:")
+    print(f"   {YELLOW}*/30 * * * * $HOME/bin/todo remind >> $HOME/.todo.log 2>&1{R}\n")
+    print(f"{BOLD}3. PATH (om 'todo' inte hittas){R}")
+    print(f"   {CYAN}echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc && source ~/.bashrc{R}\n")
+    print(f"{BOLD}4. Autostart crond vid Termux-start{R}")
+    print(f"   {CYAN}echo 'crond' >> ~/.bashrc{R}\n")
+
+def cmd_categories(args):
+    data = load()
+    cats = {}
+    for t in data["tasks"]:
+        c = t.get("category")
+        if c:
+            if c not in cats:
+                cats[c] = {"aktiva": 0, "klara": 0}
+            if t.get("done"):
+                cats[c]["klara"] += 1
+            else:
+                cats[c]["aktiva"] += 1
+    if cats:
+        print(f"\n{BOLD}Kategorier:{R}")
+        for c in sorted(cats):
+            a, k = cats[c]["aktiva"], cats[c]["klara"]
+            print(f"  {CYAN}{c:<20}{R}  aktiva: {YELLOW}{a}{R}  klara: {GREEN}{k}{R}")
+    else:
+        print(f"{DIM}Inga kategorier ännu. Lägg till med --category.{R}")
+
+# ── main ───────────────────────────────────────────────────────────────────────
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="todo",
+        description=f"{BOLD}Todo-app med påminnelser{R}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Snabbguide:
+  todo add "Handla mat" --due imorgon --remind 17:00
+  todo add "Träna" --repeat weekly --due måndag --remind 08:00 -p medel
+  todo add "Betala hyran" --repeat monthly --due "25 april" -p hög -c ekonomi
+  todo add "Ring läkare" --note "Fråga om remiss" -c hälsa
+  todo list                         visa aktiva
+  todo list --all --notes           visa alla inkl. anteckningar
+  todo done 3
+  todo snooze 2 3                   skjut upp #2 med 3 dagar
+  todo snooze 2 1 --unit veckor
+  todo search "mat"
+  todo note 4 "Kom ihåg kvitto"
+  todo stats
+  todo export                       exportera till markdown
+  todo edit 2 --due "om 2 veckor" --remind 09:00
+  todo delete 5
+  todo setup                        visa installationsinstruktioner
+""")
+
+    sub = parser.add_subparsers(dest="cmd")
+
+    # add
+    p = sub.add_parser("add", help="Lägg till uppgift")
+    p.add_argument("title")
+    p.add_argument("--due", "-d",
+                   help="Datum: idag/imorgon/måndag/'om 3 dagar'/'15 april'/YYYY-MM-DD")
+    p.add_argument("--remind", "-r", help="Påminnelsetid HH:MM")
+    p.add_argument("--repeat", choices=["daily","weekly","monthly","weekdays"])
+    p.add_argument("--priority", "-p", choices=["hög","medel","låg"])
+    p.add_argument("--category", "-c")
+    p.add_argument("--note", "-n", help="Anteckning/beskrivning")
+
+    # list
+    p = sub.add_parser("list", aliases=["ls"], help="Lista uppgifter")
+    p.add_argument("--all", "-a", action="store_true")
+    p.add_argument("--today", "-t", action="store_true")
+    p.add_argument("--overdue", action="store_true")
+    p.add_argument("--category", "-c")
+    p.add_argument("--notes", "-n", action="store_true", help="Visa anteckningar")
+
+    # done
+    p = sub.add_parser("done", help="Markera som klar")
+    p.add_argument("id", type=int)
+
+    # delete
+    p = sub.add_parser("delete", aliases=["del","rm"], help="Ta bort uppgift")
+    p.add_argument("id", type=int)
+
+    # edit
+    p = sub.add_parser("edit", help="Redigera uppgift")
+    p.add_argument("id", type=int)
+    p.add_argument("--title")
+    p.add_argument("--due", "-d")
+    p.add_argument("--remind", "-r")
+    p.add_argument("--repeat")
+    p.add_argument("--priority", "-p")
+    p.add_argument("--category", "-c")
+    p.add_argument("--note", "-n")
+
+    # snooze
+    p = sub.add_parser("snooze", help="Skjut upp uppgift")
+    p.add_argument("id",   type=int, help="Uppgiftens ID")
+    p.add_argument("days", type=int, help="Antal enheter att skjuta upp")
+    p.add_argument("--unit", default="dagar",
+                   help="dagar (standard), veckor, månader")
+
+    # search
+    p = sub.add_parser("search", help="Sök bland uppgifter")
+    p.add_argument("query")
+
+    # note
+    p = sub.add_parser("note", help="Visa/sätt anteckning")
+    p.add_argument("id", type=int)
+    p.add_argument("text", nargs="?", help="Anteckningstext (utelämna för att visa)")
+
+    # stats
+    sub.add_parser("stats", help="Visa statistik")
+
+    # export
+    p = sub.add_parser("export", help="Exportera till Markdown")
+    p.add_argument("--file", "-f", help="Filnamn (standard: ~/todo_export_DATUM.md)")
+
+    # remind
+    sub.add_parser("remind", help="Kör påminnelsekontroll (cron)")
+
+    # setup
+    sub.add_parser("setup", help="Installationsinstruktioner")
+
+    # categories
+    sub.add_parser("categories", aliases=["cats"], help="Lista kategorier")
+
+    args = parser.parse_args()
+
+    dispatch = {
+        "add":        cmd_add,
+        "list":       cmd_list, "ls": cmd_list,
+        "done":       cmd_done,
+        "delete":     cmd_delete, "del": cmd_delete, "rm": cmd_delete,
+        "edit":       cmd_edit,
+        "snooze":     cmd_snooze,
+        "search":     cmd_search,
+        "note":       cmd_note,
+        "stats":      cmd_stats,
+        "export":     cmd_export,
+        "remind":     cmd_remind,
+        "setup":      cmd_setup,
+        "categories": cmd_categories, "cats": cmd_categories,
+    }
+
+    if args.cmd is None:
+        # ingen subkommando → visa lista
+        args.all = False; args.today = False
+        args.overdue = False; args.category = None; args.notes = False
+        cmd_list(args)
+    elif args.cmd in dispatch:
+        dispatch[args.cmd](args)
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()
